@@ -1,0 +1,4 @@
+# No authentication secrets needed. Create a private workspace at http://localhost:8787.
+# Optional Telegram notifications. Never commit the real values.
+# TELEGRAM_BOT_TOKEN=123456:bot-token
+# TELEGRAM_WEBHOOK_SECRET=replace-with-a-random-token

@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "quiztime-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "ratelimits": [{ "name": "WORKSPACE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "quiztime-db",
+      "database_id": "28b642ef-228f-4fb3-b1fe-068e5c27af29",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": { "crons": ["0 * * * *"] }
+}

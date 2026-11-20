@@ -1,0 +1,31 @@
+{
+  "name": "quiztime-mcp",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787 --test-scheduled",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply quiztime-db --local",
+    "db:remote": "wrangler d1 migrations apply quiztime-db --remote",
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:mcp": "tsx scripts/smoke.ts",
+    "codex:local": "node scripts/codex.mjs local",
+    "codex:remote": "node scripts/codex.mjs remote",
+    "telegram:setup": "node scripts/telegram.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "agents": "0.34.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261120.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "wrangler": "4.165.0"
+  }
+}
