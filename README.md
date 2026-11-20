@@ -1,174 +1,204 @@
-# Quiztime MCP
+# Stick
 
-Anonymous private learning workspaces on Cloudflare Workers. **No accounts,
-sign-in screens, OAuth, or manually configured bearer tokens.** Codex supplies
-learning summaries and recall questions; D1 stores them; spaced repetition
-schedules the next quiz. Optional Telegram reminders are per workspace.
+**Make it stay.** Stick extracts useful insights from everyday agent interactions,
+keeps them organized by session, and brings them back through conversational
+Telegram quizzes. No account or sign-in: each private workspace link grants
+access to that workspace only.
 
-**Create your workspace:** https://quiztime-mcp.hidden-pond-5e6a.workers.dev
+**Live:** https://quiztime-mcp.hidden-pond-5e6a.workers.dev
 
-## Connect without signing in
+The Cloudflare Worker, D1 database, repository URL, and old private links keep
+their existing technical names so rebranding does not break saved workspaces.
+The product, frontend, MCP server, and agent configuration are now **Stick**.
 
-1. Open the homepage and click **Create my private workspace**.
-2. Save the private link it generates. It looks like `/mcp/<random-key>`.
-3. Run the displayed command:
+## Connect an agent
 
-```sh
-codex mcp add quiztime --url 'YOUR_PRIVATE_MCP_LINK'
-```
-
-Restart Codex. No `codex mcp login` or `bearer_token_env_var` is needed.
-
-Try: “Teach me TCP vs UDP, save it in Quiztime with two recall questions, and
-make the first review due immediately. Then quiz me one question at a time.”
-
-**The link is your access key.** Anyone who has it can read/change/delete that
-workspace. Keep it out of chat, screenshots, public repositories, and shared
-logs. There is no recovery for a lost link. Reuse your link across devices for
-the same workspace; creating another link creates a separate workspace.
-
-To capture learning routinely, append the opted-in guidance in
-[`docs/codex-AGENTS.example.md`](docs/codex-AGENTS.example.md) to an appropriate
-project's `AGENTS.md` without overwriting existing instructions.
-
-MCP **cannot automatically read every chat, search, or browser visit**. The client
-must call `save_learning` with context from the current conversation. Instructions
-encourage capture but cannot guarantee it. The client's model supplies summaries
-and semantic grading; the Worker makes no separate LLM calls.
-
-## Local development and Codex launcher
-
-Requires Node.js 24+ (tests use Node's built-in SQLite) and Wrangler.
+1. Create a private space on the homepage, or reopen an existing private MCP link.
+2. Save the private space/MCP links. Anyone holding them can access your data;
+   there is no lost-link recovery. The dashboard key is in its URL fragment.
+3. Run the displayed command and restart Codex:
 
 ```sh
-npm install
-npm run db:local
-npm run dev
+codex mcp add stick --url 'YOUR_PRIVATE_MCP_LINK'
 ```
 
-In a second terminal:
+4. Append [`docs/codex-AGENTS.example.md`](docs/codex-AGENTS.example.md) to your
+   project's agent instructions without overwriting existing instructions.
+
+For another MCP-compatible agent, add the same URL and capture instructions.
+Stick publishes its policy in MCP initialization instructions, but not every
+client honors those. **MCP alone cannot intercept every interaction.** Automatic
+capture requires the agent to call `capture_interaction`; reliable event capture
+requires a host-specific hook or plugin.
+
+The generic stdin bridge (`npm run capture:hook`) accepts a sanitized
+`capture_interaction` JSON payload and `STICK_URL` from its environment. It can
+be wired to a host's supported completion hook after mapping that host's payload.
+It does not install hooks or read raw transcripts. If insights are omitted, it
+requests Azure extraction; supplied insights avoid an extra server-side model call.
+
+## Capture and dashboard
+
+`capture_interaction` stores a redacted user request, interaction summary, and
+0–5 transferable insights/cards: concepts, decisions and reasoning, corrected
+mistakes, and techniques. Ordinary exchanges can be saved without quiz cards.
+Every conversation uses a stable `session_key`; `event_id` retries are deduplicated
+within that session. Cards are created only when there are useful insights.
+
+The black-and-white dashboard displays **real saved records**, per-session filters,
+original redacted requests, insight explanations, card counts, and review progress.
+It refreshes while open, persists the current workspace in local browser storage,
+and never displays another workspace's sessions. It shows up to 50 recent records
+per selected session. Old `save_learning` records appear under **Earlier saves**.
+
+Creating a space enables safe automatic capture by default, with a clear opt-in
+notice. Capture can be paused from the dashboard or `set_preferences`. Explicit
+`save_learning` remains available for backwards compatibility.
+
+## Telegram bot setup
+
+### 1. Create the bot
+
+In Telegram, open the verified **[@BotFather](https://t.me/BotFather)**:
+
+1. Send `/newbot`.
+2. Choose a display name, such as **Stick**.
+3. Choose an available username ending in `bot`, such as `stick_yourname_bot`.
+4. Save the bot token privately. Never paste it into chat or commit it.
+
+### 2. Configure Azure
+
+On this machine, Stick's Azure configuration was imported securely from OpenCode's
+API credential store and `AZURE_RESOURCE_NAME`. The `gpt-6-luna` deployment was
+validated with a live structured-output request. To repeat that explicit import:
 
 ```sh
-npm run codex:local
+npm run azure:import
 ```
 
-The launcher creates a workspace automatically the first time and saves its link
-in ignored `.quiztime/local.json` (mode 0600). Subsequent launches reuse it. It
-only configures this Codex process; it does not overwrite your global config.
+For another operator, put these in ignored `.dev.vars` or the shell environment:
 
-For Cloudflare:
-
-```sh
-npm run codex:remote
+```dotenv
+AZURE_OPENAI_ENDPOINT=https://YOUR_RESOURCE.openai.azure.com/openai/v1/
+AZURE_OPENAI_DEPLOYMENT=YOUR_DEPLOYMENT
+AZURE_OPENAI_API_KEY=YOUR_PRIVATE_KEY
 ```
 
-This saves a separate link in `.quiztime/remote.json`. Or set `QUIZTIME_URL` to
-an existing private MCP link before running either launcher. Local and remote
-databases are separate. If you delete a launcher workspace, its cached link stops
-working; create a replacement through the homepage and pass `QUIZTIME_URL`.
+Then run `npm run azure:setup`. Both OpenAI v1 base URLs and Azure resource roots
+are supported; roots use the deployment endpoint and optional
+`AZURE_OPENAI_API_VERSION` (default `2024-10-21`). The model must support chat
+completions and JSON mode. Azure keys are server-side only. No provider credential
+is returned by any frontend/MCP route.
 
-## Telegram reminders
+### 3. Configure Telegram and register its webhook
 
-No user has to supply a bot token or chat ID. The server operator configures one
-bot; each user asks Codex to call `connect_telegram`, opens the returned one-time
-Telegram link, and taps **Start**. Pairing expires in ten minutes and can only
-link private chats. It does not share the workspace MCP link with Telegram.
+Generate a separate webhook secret with `openssl rand -hex 32`. Add both values
+to private `.dev.vars` (mode 0600), preserving any existing values:
 
-Operator setup:
+```dotenv
+TELEGRAM_BOT_TOKEN=YOUR_BOTFATHER_TOKEN
+TELEGRAM_WEBHOOK_SECRET=YOUR_RANDOM_WEBHOOK_SECRET
+```
 
-1. Create a bot with Telegram **@BotFather** using `/newbot`.
-2. Put `TELEGRAM_BOT_TOKEN` and a random `TELEGRAM_WEBHOOK_SECRET` in private
-   `.dev.vars` (see `.dev.vars.example`), or export them in your shell.
-3. Run the setup script, which uploads both secrets and registers the webhook:
+Run:
 
 ```sh
 npm run telegram:setup
 ```
 
-It registers `https://quiztime-mcp.hidden-pond-5e6a.workers.dev/telegram/webhook`.
-Set `QUIZTIME_ORIGIN` for another deployment. Keep credentials private. The
-webhook checks Telegram's secret header and consumes pairing links atomically.
-Real delivery requires your bot credentials; unit tests mock Telegram's API.
+The script uploads both Worker secrets and registers the protected webhook at
+`https://quiztime-mcp.hidden-pond-5e6a.workers.dev/telegram/webhook`. Set
+`STICK_ORIGIN` for a different deployment. No user needs to supply a chat ID.
+Secrets are passed over stdin, not command-line arguments, and are not printed.
 
-Users may ask Codex to `test_notification` or `disconnect_telegram`. Hourly UTC
-cron sends only when questions are due, at most one reminder per workspace per
-24h. It processes up to 100 eligible workspaces per invocation. Failed sends
-retry on a later check. Messages contain only the workspace's due count, not
-learning contents or private links. The server never uses a shared chat ID.
+### 4. Pair your private space
 
-Telegram cannot open Codex or run an unsolicited quiz there; it reminds users to
-return and ask for a review. Without bot/webhook secrets, cron safely does nothing.
+Open your Stick dashboard and click **Connect Telegram**, or ask your agent to
+call `connect_telegram`. Open its one-time Telegram link and tap **Start**. The
+pairing link expires in 10 minutes, works only in private chats, and does not
+share the full workspace key with Telegram. One chat has one active workspace;
+pairing another replaces that chat's previous association.
 
-Local cron simulation:
+### 5. Test a full conversation
+
+Ask your MCP agent to save an interaction with a recall card and
+`first_review_in_minutes: 0`, then send the bot:
+
+- `/quiz`: receive one due question, with no reference answer shown.
+- Reply with your answer: Azure evaluates it, gives feedback, and FSRS schedules it.
+- “Can you explain why?”: discuss the saved insight directly in Telegram.
+- `/skip`: skip without advancing that card's schedule.
+- `/stop`: pause proactive quizzes; `/resume`: enable them again.
+
+The server checks due cards every five minutes, respects timezone/quiet hours,
+spaces proactive messages at least four hours apart, and observes the daily
+question budget (default 3). After three unanswered proactive pings it pauses
+automatically. Explicit `/quiz` requests may exceed the proactive budget.
+
+Each chat has a Durable Object inbox: webhooks are acknowledged quickly, turns
+are serialized, and retries reuse stored responses. Network delivery is
+at-least-once, not guaranteed exactly-once. Model/API failures retry with backoff.
+The last 100 Telegram message rows are kept per workspace; Azure receives up to
+10 recent history rows and 6 recent saved summaries, not all historical data.
+Chat history cascades when the workspace is deleted.
+
+## Review scheduling
+
+Stick uses **FSRS-6** (`ts-fsrs`), retaining each card's stability/difficulty state
+and review log. Ratings are again/hard/good/easy. Learning and relearning steps
+are 10 minutes, retention defaults to 90%, maximum interval is one year, and
+fuzzing is disabled. Telegram prioritizes important insights and repeated lapses.
+Old cards initialize FSRS state on their next review; saved data is not discarded.
+
+## Development and tests
+
+Node.js 24+ is recommended (unit tests use built-in SQLite).
 
 ```sh
-curl 'http://localhost:8787/__scheduled?cron=0+*+*+*+*'
+npm install
+npm run db:local
+npm run dev
+# Another terminal:
+npm run codex:local
 ```
 
-## Tools and review schedule
-
-| Tool | Purpose |
-| --- | --- |
-| `save_learning` | Original question, summary, sources, tags, 1–5 recall cards |
-| `list_learnings` | Search/browse this workspace's summaries |
-| `get_due_reviews` | Due questions without reference answers |
-| `next_question` | Start/resume one quiz attempt |
-| `submit_answer` | Store actual learner response, then reveal reference |
-| `record_review` | Grade and schedule the next review |
-| `get_stats` | Workspace progress and Telegram connection status |
-| `delete_learning` | Delete one learning, cards, and review history |
-| `connect_telegram` | Generate a one-time reminder pairing link |
-| `disconnect_telegram` | Stop reminders and invalidate pending pairing |
-| `test_notification` | Send an explicitly requested test ping |
-| `delete_workspace` | Delete everything and revoke the private MCP link |
-
-First review defaults to one hour. Wrong answers repeat in 10 minutes; first
-hard/good reviews in one day; first easy reviews in four days. Later intervals
-grow by 1.2×/2×/3×, capped at one year. This is a simple heuristic, not FSRS or
-SM-2. The host grades recall; the server records and schedules it. Skipping does
-not advance a card's schedule.
-
-## Test and deploy
+`npm run codex:remote` uses the deployed server. Launchers persist new links in
+ignored `.stick/` (0600), reuse legacy `.quiztime/` links if present, and do not
+overwrite global Codex config. `STICK_URL` overrides the link; `QUIZTIME_URL`
+remains a compatibility alias. Local and remote databases are separate.
 
 ```sh
 npm run check
 npm test
-# Requires the local Worker running:
 npm run test:mcp
-# Test Cloudflare:
-QUIZTIME_ORIGIN=https://quiztime-mcp.hidden-pond-5e6a.workers.dev npm run test:mcp
+npx playwright install chromium
+npm run test:browser
+# Optional live validations (Azure/Codex credentials required; small model costs):
+npm run test:azure-live
+npm run test:codex
+# Test deployment:
+STICK_ORIGIN=https://quiztime-mcp.hidden-pond-5e6a.workers.dev npm run test:mcp
 ```
 
-Smoke tests create two disposable workspaces, connect with no auth headers, and
-verify isolation across summaries, stats, card IDs, answer/grade IDs, and deletes.
-They also test the complete recall cycle, duplicate-grade rejection, cascading
-cleanup, and private-link revocation. Only generated test workspaces are deleted.
+Smoke/browser tests create disposable workspaces and delete only those. They
+test isolation, capture/deduplication, real session display, quiz/FSRS lifecycle,
+safe text rendering, mobile layout, and preferences. Azure/Telegram core tests
+mock network responses. A live Azure request is verified separately; real bot
+delivery still needs your BotFather token and pairing.
 
-```sh
-npx wrangler login
-# Different account: create quiztime-db and update database_id in wrangler.jsonc.
-npm run db:remote
-npm run deploy
-```
+Deploy: `npm run db:remote`, then `npm run deploy`. The pinned Wrangler `4.165.0`
+avoids an activation error observed with `4.166.0`.
 
-No MCP auth secrets are required. Wrangler is pinned to tested `4.165.0` because
-`4.166.0` failed deployment activation in this account (API error 10007).
+## Safety and limits
 
-## Privacy and limits
-
-- Every learning read/write is scoped to its workspace, including lookups by ID.
-- Workspace keys are random 256-bit capabilities, stored only as SHA-256 hashes.
-  This is link-based authorization, **not an identity system**. It is not suitable
-  for sensitive regulated data, account recovery, or identifying a real person.
-- URL keys may appear in client/server request logs, shell history, and Codex
-  configuration; protect those as carefully as the link. No third-party homepage
-  assets are loaded; link responses are no-store and use no-referrer policies.
-- Workspace creation is limited to 10 requests/minute/IP (Cloudflare's per-location
-  rate limit), and workspaces have a soft 1000-learning limit. These do not fully
-  prevent automated abuse; monitor quotas/costs before promoting a public service.
-- `/mcp` no longer exposes a shared database. Use `/mcp/<private-key>`.
-- Learning persists until deleted. `delete_workspace` cascades and revokes access.
-- Legacy single-owner records, if any, remain unassigned and inaccessible to new
-  workspaces; migration never guesses ownership. None existed remotely at migration.
-- Worker/D1/client-model usage may incur costs. A crash after claiming a reminder
-  can delay the next send by 24h; delivery is best-effort.
+- No accounts, OAuth, or manual bearer configuration: private links are capabilities.
+- Never share links, browser storage, shell history, or client/server logs containing them.
+- Credential-pattern detection rejects obvious secrets before capture/Azure and
+  redacts Telegram input before durable queuing. It is not a complete DLP system;
+  host agents must still redact sensitive data and honor capture preferences.
+- Stored content is untrusted data. Azure only produces validated text/JSON;
+  it cannot execute commands or access other workspaces.
+- AI is capped at 100 attempted calls/workspace/UTC day and 10/minute; workspace
+  creation is rate-limited. Limits do not fully prevent distributed public abuse.
+- Azure, Workers, Durable Objects, and D1 may incur costs. Monitor quotas before
+  promoting this publicly. This is not a system for regulated or highly sensitive data.

@@ -39,6 +39,6 @@ test('homepage does not embed keys, load third-party assets, or cache user links
   assert.equal(page.headers.get('Referrer-Policy'), 'no-referrer');
   assert.ok(page.headers.get('Content-Security-Policy')?.includes("default-src 'none'"));
   const html = await page.text();
-  assert.ok(html.includes('Create my private workspace'));
+  assert.ok(html.includes('Create a private space'));
   assert.ok(!html.includes('bearer_token'));
 });

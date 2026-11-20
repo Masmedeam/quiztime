@@ -1,6 +1,6 @@
 {
-  "name": "quiztime-mcp",
-  "version": "2.0.0",
+  "name": "stick-mcp",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,17 +13,25 @@
     "test:mcp": "tsx scripts/smoke.ts",
     "codex:local": "node scripts/codex.mjs local",
     "codex:remote": "node scripts/codex.mjs remote",
-    "telegram:setup": "node scripts/telegram.mjs"
+    "telegram:setup": "node scripts/telegram.mjs",
+    "azure:setup": "node scripts/azure.mjs",
+    "azure:import": "node scripts/azure-opencode.mjs",
+    "capture:hook": "tsx scripts/capture-hook.ts",
+    "test:browser": "tsx scripts/browser.ts",
+    "test:azure-live": "tsx scripts/azure-live.ts",
+    "test:codex": "node scripts/codex-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
     "agents": "0.34.0",
+    "ts-fsrs": "^5.4.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261120.1",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@types/node": "^24.0.0",
+    "playwright": "^1.65.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "wrangler": "4.165.0"

@@ -5,7 +5,7 @@ import { URL as NodeURL } from 'node:url';
 // Exercise real SQLite constraints/transactions, using the same migrations as D1.
 export function testDb() {
   const sqlite = new DatabaseSync(':memory:');
-  for (const name of ['0001_learning.sql', '0002_anonymous_workspaces.sql']) {
+  for (const name of ['0001_learning.sql', '0002_anonymous_workspaces.sql', '0003_stick.sql']) {
     sqlite.exec(readFileSync(new NodeURL(`../migrations/${name}`, import.meta.url), 'utf8'));
   }
   class Statement {

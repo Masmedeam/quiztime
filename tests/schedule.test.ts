@@ -1,18 +1,37 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scheduleReview } from '../src/schedule';
+import { isQuietHour, localClock, scheduleReview } from '../src/schedule';
 
-test('first reviews: again 10m, hard/good 1d, easy 4d', () => {
-  for (const [rating, minutes] of [['again', 10], ['hard', 1440], ['good', 1440], ['easy', 5760]] as const) {
-    assert.deepEqual(scheduleReview(0, rating, 1000), { interval_minutes: minutes, due_at: 1000 + minutes * 60_000 });
+test('FSRS persists memory state/log and stronger recall schedules later reviews', () => {
+  const now = Date.UTC(2026, 10, 20, 12);
+  const again = scheduleReview(null, 'again', now);
+  const good = scheduleReview(null, 'good', now);
+  const easy = scheduleReview(null, 'easy', now);
+  assert.ok(again.due_at > now);
+  assert.ok(good.due_at > again.due_at);
+  assert.ok(easy.due_at >= good.due_at);
+  assert.equal(JSON.parse(good.fsrs_state).reps, 1);
+  assert.ok(JSON.parse(good.fsrs_log).rating);
+  const next = scheduleReview(good.fsrs_state, 'good', good.due_at);
+  assert.equal(JSON.parse(next.fsrs_state).reps, 2);
+  assert.ok(next.interval_minutes >= good.interval_minutes);
+});
+test('higher target retention increases review frequency and intervals stay capped', () => {
+  const now = Date.UTC(2026, 10, 20, 12);
+  assert.ok(scheduleReview(null, 'easy', now, .97).interval_minutes <= scheduleReview(null, 'easy', now, .8).interval_minutes);
+  let state: string | null = null;
+  let time = now;
+  for (let i = 0; i < 25; i++) {
+    const scheduled = scheduleReview(state, 'easy', time);
+    assert.ok(scheduled.interval_minutes <= 365 * 1440);
+    state = scheduled.fsrs_state; time = scheduled.due_at;
   }
 });
-test('successful recall grows the interval; failure resets it', () => {
-  assert.equal(scheduleReview(1440, 'good', 0).interval_minutes, 2880);
-  assert.equal(scheduleReview(1440, 'easy', 0).interval_minutes, 4320);
-  assert.equal(scheduleReview(1440, 'hard', 0).interval_minutes, 1728);
-  assert.equal(scheduleReview(10080, 'again', 0).interval_minutes, 10);
-});
-test('maximum interval is one year', () => {
-  assert.equal(scheduleReview(365 * 1440, 'easy', 0).interval_minutes, 365 * 1440);
+test('quiet hours handle overnight/same-day ranges and timezones correctly', () => {
+  assert.equal(isQuietHour(23, 22, 8), true);
+  assert.equal(isQuietHour(7, 22, 8), true);
+  assert.equal(isQuietHour(12, 22, 8), false);
+  assert.equal(isQuietHour(12, 9, 17), true);
+  assert.equal(isQuietHour(12, 0, 0), false);
+  assert.deepEqual(localClock('Asia/Tokyo', Date.UTC(2026, 0, 1, 20)), { day: '2026-01-02', hour: 5 });
 });

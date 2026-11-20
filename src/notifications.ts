@@ -1,11 +1,9 @@
 import { hashKey, randomKey } from './workspaces';
-
-export interface Env {
-  DB: D1Database;
-  WORKSPACE_LIMITER: RateLimit;
-  TELEGRAM_BOT_TOKEN?: string;
-  TELEGRAM_WEBHOOK_SECRET?: string;
-}
+import type { Env } from './env';
+import { azureConfigured } from './azure';
+import { isQuietHour, localClock } from './schedule';
+import { hasSensitiveContent } from './memory';
+export type { Env } from './env';
 
 export async function sendTelegram(env: Env, chatId: string, text: string) {
   if (!env.TELEGRAM_BOT_TOKEN) throw new Error('Telegram is not configured.');
@@ -36,42 +34,37 @@ export async function connectTelegram(env: Env, workspaceId: string) {
 export async function telegramWebhook(request: Request, env: Env) {
   if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
   if (!env.TELEGRAM_WEBHOOK_SECRET || request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.TELEGRAM_WEBHOOK_SECRET) return new Response('Forbidden', { status: 403 });
-  let update: { message?: { text?: string; chat?: { id?: number; type?: string } } };
+  let update: { update_id?: number; message?: { text?: string; chat?: { id?: number; type?: string } } };
   try { update = await request.json(); }
   catch { return new Response('Bad request', { status: 400 }); }
   const message = update.message;
   const chatId = message?.chat?.id;
-  const key = /^\/start(?:@[A-Za-z0-9_]+)? ([A-Za-z0-9_-]{43})$/.exec(message?.text ?? '')?.[1];
-  // Never link group chats or accept a user-supplied workspace ID.
-  if (!key || message?.chat?.type !== 'private' || !Number.isSafeInteger(chatId)) return new Response('OK');
-  const keyHash = await hashKey(key);
-  const now = Date.now();
-  // Consume and update atomically. A replay cannot reassign the destination.
-  const changes = await env.DB.batch([
-    env.DB.prepare('UPDATE workspaces SET telegram_chat_id = ?, last_sent_at = 0 WHERE id IN (SELECT workspace_id FROM telegram_links WHERE key_hash = ? AND expires_at > ?)')
-      .bind(String(chatId), keyHash, now),
-    env.DB.prepare('DELETE FROM telegram_links WHERE key_hash = ?').bind(keyHash),
-  ]);
-  if (changes[0].meta.changes) {
-    try { await sendTelegram(env, String(chatId), '🧠 Your Quiztime workspace is connected. I’ll remind you when recall questions are due. You can disconnect reminders from Codex.'); }
-    catch { console.error('Telegram pairing confirmation failed.'); }
-  }
-  return new Response('OK');
+  if (message?.chat?.type !== 'private' || !Number.isSafeInteger(chatId) || !Number.isSafeInteger(update.update_id) || !message?.text) return new Response('OK');
+  if (!(await env.AI_LIMITER.limit({ key: `telegram:${chatId}` })).success) return new Response('OK');
+  const safeText = hasSensitiveContent(message.text) ? '[Stick: sensitive content redacted]' : message.text.slice(0, 4000);
+  return env.TELEGRAM_AGENT.get(env.TELEGRAM_AGENT.idFromName(String(chatId))).fetch('https://stick-agent/inbox', {
+    method: 'POST', body: JSON.stringify({ id: `telegram:${update.update_id}`, chatId: String(chatId), kind: 'message', text: safeText }),
+  });
 }
 
 export async function notifyDue(env: Env, now = Date.now()) {
-  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET) return;
-  const due = await env.DB.prepare('SELECT w.id, w.telegram_chat_id, COUNT(*) AS count FROM workspaces w JOIN learnings l ON l.workspace_id = w.id JOIN cards c ON c.learning_id = l.id WHERE w.telegram_chat_id IS NOT NULL AND w.last_sent_at <= ? AND c.due_at <= ? GROUP BY w.id ORDER BY w.last_sent_at LIMIT 100')
-    .bind(now - 24 * 60 * 60_000, now).all<{ id: string; telegram_chat_id: string; count: number }>();
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET || !azureConfigured(env)) return;
+  const due = await env.DB.prepare('SELECT w.*, COUNT(*) AS count FROM workspaces w JOIN learnings l ON l.workspace_id = w.id JOIN cards c ON c.learning_id = l.id WHERE w.telegram_chat_id IS NOT NULL AND w.notifications_enabled=1 AND w.unanswered_pings<3 AND w.last_sent_at <= ? AND c.due_at <= ? GROUP BY w.id ORDER BY w.last_sent_at LIMIT 100')
+    .bind(now - 4 * 60 * 60_000, now).all<{ id: string; telegram_chat_id: string; timezone: string; quiet_start: number; quiet_end: number; question_day: string; questions_today: number; daily_limit: number }>();
   for (const workspace of due.results) {
+    const clock = localClock(workspace.timezone, now);
+    if (isQuietHour(clock.hour, workspace.quiet_start, workspace.quiet_end) || (workspace.question_day === clock.day && workspace.questions_today >= workspace.daily_limit)) continue;
     const claimed = await env.DB.prepare('UPDATE workspaces SET last_sent_at = ? WHERE id = ? AND last_sent_at <= ? AND telegram_chat_id = ?')
-      .bind(now, workspace.id, now - 24 * 60 * 60_000, workspace.telegram_chat_id).run();
+      .bind(now, workspace.id, now - 4 * 60 * 60_000, workspace.telegram_chat_id).run();
     if (!claimed.meta.changes) continue;
     try {
-      await sendTelegram(env, workspace.telegram_chat_id, `🧠 Quiztime: ${workspace.count} recall question${workspace.count === 1 ? '' : 's'} ready. Open Codex and say “Quiz me on my due learning.” Try answering before looking at your notes.`);
+      const response = await env.TELEGRAM_AGENT.get(env.TELEGRAM_AGENT.idFromName(workspace.telegram_chat_id)).fetch('https://stick-agent/inbox', {
+        method: 'POST', body: JSON.stringify({ id: `scheduled:${workspace.id}:${now}`, kind: 'scheduled', chatId: workspace.telegram_chat_id, workspaceId: workspace.id }),
+      });
+      if (!response.ok) throw new Error('Queue unavailable');
     } catch {
       await env.DB.prepare('UPDATE workspaces SET last_sent_at = 0 WHERE id = ? AND last_sent_at = ?').bind(workspace.id, now).run();
-      console.error('Quiztime reminder failed; will retry at the next scheduled check.');
+      console.error('Stick quiz enqueue failed; will retry at the next scheduled check.');
     }
   }
 }

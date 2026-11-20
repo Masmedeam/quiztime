@@ -2,3 +2,8 @@
 # Optional Telegram notifications. Never commit the real values.
 # TELEGRAM_BOT_TOKEN=123456:bot-token
 # TELEGRAM_WEBHOOK_SECRET=replace-with-a-random-token
+# Azure OpenAI v1 base URL or Azure resource root; values stay server-side.
+# AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/openai/v1/
+# AZURE_OPENAI_DEPLOYMENT=your-deployment-name
+# AZURE_OPENAI_API_KEY=your-private-azure-key
+# AZURE_OPENAI_API_VERSION=2024-10-21

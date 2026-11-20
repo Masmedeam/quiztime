@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const origin = new URL(process.env.QUIZTIME_ORIGIN ?? 'http://localhost:8787').origin;
+const origin = new URL(process.env.STICK_ORIGIN ?? process.env.QUIZTIME_ORIGIN ?? 'http://localhost:8787').origin;
 const headers = { 'Content-Type': 'application/json' };
 const home = await fetch(origin);
 assert.equal(home.status, 200);
@@ -41,8 +41,8 @@ try {
   const a = await makeClient('workspace-a-smoke');
   const b = await makeClient('workspace-b-smoke');
   assert.notEqual(connections[0].url, connections[1].url);
-  assert.equal((await a.listTools()).tools.length, 12);
-  console.log('PASS: anonymous private workspace creation and 12-tool discovery without auth headers');
+  assert.equal((await a.listTools()).tools.length, 16);
+  console.log('PASS: anonymous private workspace creation and 16-tool discovery without auth headers');
   const saved = await call(a, 'save_learning', {
     title: `Smoke test ${Date.now()}`, user_question: 'Why does active recall help?',
     summary: 'Retrieving information from memory strengthens later recall and reveals knowledge gaps.',
@@ -76,15 +76,38 @@ try {
   await denied(b, 'submit_answer', { attempt_id: question.attempt_id, user_answer: 'Unauthorized read' });
   await denied(b, 'record_review', { attempt_id: question.attempt_id, rating: 'easy', feedback: 'Unauthorized grade' });
   const review = await call(a, 'record_review', { attempt_id: question.attempt_id, rating: 'good', feedback: 'Correct unaided recall.' });
-  assert.equal(review.interval_minutes, 1440);
+  assert.ok(review.interval_minutes > 0);
+  assert.equal(review.scheduler, 'FSRS-6');
   await denied(a, 'record_review', { attempt_id: question.attempt_id, rating: 'good', feedback: 'Duplicate grade' });
   assert.equal((await call(a, 'get_due_reviews')).due_count, 0);
   assert.equal((await call(a, 'get_stats')).completed_reviews, 1);
   assert.equal((await call(b, 'get_stats')).completed_reviews, 0);
-  console.log('PASS: hidden answers, resumable quiz, feedback, next-day scheduling, duplicate grade rejection');
+  console.log('PASS: hidden answers, resumable quiz, feedback, FSRS scheduling, duplicate grade rejection');
   await call(a, 'delete_learning', { learning_id: saved.learning_id, confirm: true });
   for (const key of ['learnings', 'cards', 'completed_reviews', 'successful_reviews']) assert.equal((await call(a, 'get_stats'))[key], 0);
   console.log('PASS: learning deletion cascades to cards and review history');
+  const interaction = { session_key: 'smoke-session', session_title: 'Debugging session', source_agent: 'Codex', event_id: 'exchange-1', title: 'A useful decision', user_message: 'How should retries work?', summary: 'Make writes idempotent.', insights: [{ title: 'Idempotency', explanation: 'Retrying should not duplicate effects.', kind: 'technique', importance: 'high' }], cards: [{ question: 'Why use an idempotency key?', expected_answer: 'Prevent duplicate effects.' }] };
+  const captured = await call(a, 'capture_interaction', interaction);
+  const duplicateCapture = await call(a, 'capture_interaction', interaction);
+  assert.equal(duplicateCapture.duplicate, true);
+  assert.equal(duplicateCapture.learning_id, captured.learning_id);
+  assert.equal((await call(a, 'list_sessions')).length, 1);
+  const aKey = new URL(connections[0].url).pathname.split('/')[2];
+  const bKey = new URL(connections[1].url).pathname.split('/')[2];
+  const ownDashboard = await (await fetch(`${origin}/api/workspaces/${aKey}?session=${captured.session_id}`)).json() as { entries: Array<{ title: string }>; stats: { entries: number } };
+  assert.equal(ownDashboard.entries.length, 1); assert.equal(ownDashboard.entries[0].title, interaction.title);
+  const otherDashboard = await (await fetch(`${origin}/api/workspaces/${bKey}?session=${captured.session_id}`)).json() as { entries: unknown[] };
+  assert.equal(otherDashboard.entries.length, 0);
+  const prefs = await call(a, 'get_preferences');
+  await call(a, 'set_preferences', { ...prefs, capture_enabled: false });
+  assert.equal((await call(a, 'capture_interaction', { ...interaction, event_id: 'paused' })).saved, false);
+  await call(a, 'set_preferences', { ...prefs, capture_enabled: true });
+  console.log('PASS: interaction capture, event deduplication, real session dashboard isolation, capture pause');
+  if (process.env.STICK_TEST_AZURE === '1') {
+    const extracted = await call(a, 'capture_interaction', { ...interaction, event_id: 'azure-extraction', insights: [], cards: [], extract_with_ai: true });
+    assert.equal(extracted.saved, true); assert.ok(extracted.insights_saved > 0); assert.ok(extracted.cards_saved > 0);
+    console.log('PASS: deployed Worker Azure insight/question extraction');
+  }
 } finally {
   for (const { client, url } of connections) {
     try {

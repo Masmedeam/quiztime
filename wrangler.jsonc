@@ -6,7 +6,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
-  "ratelimits": [{ "name": "WORKSPACE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+  "ratelimits": [
+    { "name": "WORKSPACE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "AI_LIMITER", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }
+  ],
+  "durable_objects": { "bindings": [{ "name": "TELEGRAM_AGENT", "class_name": "TelegramAgent" }] },
+  "migrations": [{ "tag": "v1-stick-telegram", "new_sqlite_classes": ["TelegramAgent"] }],
   "d1_databases": [
     {
       "binding": "DB",
@@ -15,5 +20,5 @@
       "migrations_dir": "migrations"
     }
   ],
-  "triggers": { "crons": ["0 * * * *"] }
+  "triggers": { "crons": ["*/5 * * * *"] }
 }
