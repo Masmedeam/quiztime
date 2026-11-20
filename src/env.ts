@@ -9,4 +9,9 @@ export interface Env {
   AZURE_OPENAI_DEPLOYMENT?: string;
   AZURE_OPENAI_API_KEY?: string;
   AZURE_OPENAI_API_VERSION?: string;
+  AMPLITUDE_API_KEY?: string;
+  AMPLITUDE_API_URL?: string;
+  STATSIG_SERVER_SECRET?: string;
+  COGNEE_API_URL?: string;
+  COGNEE_API_KEY?: string;
 }

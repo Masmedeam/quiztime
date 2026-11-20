@@ -202,3 +202,43 @@ avoids an activation error observed with `4.166.0`.
   creation is rate-limited. Limits do not fully prevent distributed public abuse.
 - Azure, Workers, Durable Objects, and D1 may incur costs. Monitor quotas before
   promoting this publicly. This is not a system for regulated or highly sensitive data.
+
+## Sponsor integrations (all optional; each is a no-op without its keys)
+
+Set secrets locally in `.dev.vars` (see `.dev.vars.example`) or remotely with
+`npx wrangler secret put <NAME>`.
+
+### Amplitude + Statsig: experimenting on what makes learning stick
+
+- **Statsig** assigns every new workspace a variant of the experiment
+  `stick_review_policy` (`src/telemetry.ts`). Its parameters set the workspace's
+  starting FSRS `desired_retention` (0.8–0.97) and proactive Telegram
+  `daily_limit` (1–10). Users can still change both in preferences.
+- **Amplitude** gets the same events, with the variant set as a user property on
+  `workspace_created` so every chart can be split by variant.
+- Events: `workspace_created`, `interaction_captured`, `learning_saved`,
+  `question_asked {channel, proactive}`, `card_reviewed {rating, recalled, channel,
+  review_number, interval_minutes}`, `question_skipped`, `telegram_connected`,
+  `telegram_discussion`, `connections_searched`, `notifications_paused/resumed`,
+  `workspace_deleted`.
+- `card_reviewed` has `value` = 1 for good/easy recall, so a Statsig metric on its
+  mean is **recall rate**, the experiment's primary metric.
+- The user id is the internal workspace UUID, never the private link. Payloads never
+  contain titles, questions, answers or chat ids (enforced by `tests/sponsors.test.ts`).
+
+Statsig console setup: create experiment `stick_review_policy` with parameters
+`desired_retention` (number) and `daily_limit` (number), e.g. control 0.9/3 vs.
+treatment 0.85/5, and add metric `card_reviewed` (mean of value).
+
+### Cognee: a knowledge graph of what you learned
+
+- Each capture with insights and each `save_learning` is added to a per-workspace
+  Cognee dataset (`stick_<workspace id>`), then `cognify` builds the graph in the
+  background. Only the redacted summary, insights and tags are sent.
+- New MCP tool **`find_connections`**: the agent calls it before writing cards, so it
+  can add a card linking new learning to earlier learning.
+- Telegram follow-up questions (outside a quiz) include related graph context, so
+  Stick can discuss everything you saved, not only the six most recent entries.
+- `delete_workspace` deletes the Cognee dataset as well. `delete_learning` only
+  removes the D1 copy for now; the graph keeps it until the workspace is deleted.
+- D1 stays the source of truth: Cognee outages never block saving or quizzing.

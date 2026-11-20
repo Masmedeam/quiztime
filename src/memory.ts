@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { cardSchema, insightSchema, extractInsights } from './azure';
 import type { Env } from './env';
+import { track } from './telemetry';
+import { rememberInCognee } from './cognee';
 
 export const captureSchema = z.object({
   session_key: z.string().trim().min(1).max(120),
@@ -54,5 +56,10 @@ export async function captureInteraction(env: Env, workspaceId: string, input: C
     const existing = await env.DB.prepare('SELECT id,session_id FROM learnings WHERE workspace_id = ? AND event_id = ?').bind(workspaceId, storedEvent).first();
     return { saved: true, duplicate: true, learning_id: existing?.id, session_id: existing?.session_id };
   }
+  await Promise.all([
+    track(env, workspaceId, 'interaction_captured', { insights: extraction.insights.length, cards: cards.length, extracted_with_ai: input.extract_with_ai, source_agent: input.source_agent.slice(0, 40) }),
+    // Only exchanges with transferable insights go into the knowledge graph.
+    extraction.insights.length ? rememberInCognee(env, workspaceId, { title: input.title, summary: input.summary, tags: input.tags, insights: extraction.insights }) : null,
+  ]);
   return { saved: true, learning_id: learningId, session_id: session!.id, insights_saved: extraction.insights.length, cards_saved: cards.length, first_review_at: cards.length ? new Date(dueAt).toISOString() : null };
 }

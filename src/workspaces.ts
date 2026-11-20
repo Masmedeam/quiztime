@@ -8,9 +8,10 @@ export function randomKey() {
 export async function hashKey(key: string) {
   return Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key))).toString('hex');
 }
-export async function createWorkspace(db: D1Database, origin: string) {
+export async function createWorkspace(db: D1Database, origin: string, options: { id?: string; desired_retention?: number; daily_limit?: number } = {}) {
   const key = randomKey();
-  await db.prepare('INSERT INTO workspaces(id,key_hash,created_at) VALUES (?,?,?)').bind(crypto.randomUUID(), await hashKey(key), Date.now()).run();
+  await db.prepare('INSERT INTO workspaces(id,key_hash,created_at,desired_retention,daily_limit) VALUES (?,?,?,?,?)')
+    .bind(options.id ?? crypto.randomUUID(), await hashKey(key), Date.now(), options.desired_retention ?? 0.9, options.daily_limit ?? 3).run();
   return { mcp_url: `${origin}/mcp/${key}`, dashboard_url: `${origin}/#${key}`, warning: 'Keep this link private. Anyone with it can access this workspace. There is no account or lost-link recovery.' };
 }
 export async function findWorkspace(db: D1Database, key: string) {

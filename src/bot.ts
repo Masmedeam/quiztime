@@ -4,6 +4,8 @@ import { captureInteraction, captureSchema, hasSensitiveContent } from './memory
 import { hashKey } from './workspaces';
 import { finishReview } from './reviews';
 import { isQuietHour, localClock } from './schedule';
+import { track } from './telemetry';
+import { searchCognee } from './cognee';
 
 export interface BotEvent { id: string; chatId: string; kind: 'message' | 'scheduled'; text?: string; workspaceId?: string }
 interface BotWorkspace { id: string; timezone: string; quiet_start: number; quiet_end: number; daily_limit: number; question_day: string; questions_today: number; unanswered_pings: number; notifications_enabled: number; capture_enabled: number }
@@ -29,6 +31,7 @@ async function nextQuestion(env: Env, workspace: BotWorkspace, proactive: boolea
   if (!attempt) return '';
   await env.DB.prepare('UPDATE workspaces SET questions_today=CASE WHEN question_day=? THEN questions_today+1 ELSE 1 END,question_day=?,unanswered_pings=unanswered_pings+?,notifications_enabled=CASE WHEN ?=1 AND unanswered_pings>=2 THEN 0 ELSE notifications_enabled END WHERE id=?')
     .bind(clock.day, clock.day, Number(proactive), Number(proactive), workspace.id).run();
+  await track(env, workspace.id, 'question_asked', { channel: 'telegram', proactive });
   return `Stick · ${attempt.title}\n\n${attempt.question}\n\nReply with your answer, ask for a hint, or send /skip. No notes needed.`;
 }
 
@@ -43,6 +46,10 @@ export async function handleBotEvent(env: Env, event: BotEvent): Promise<string>
       env.DB.prepare('UPDATE workspaces SET telegram_chat_id=?,notifications_enabled=1,unanswered_pings=0 WHERE id IN (SELECT workspace_id FROM telegram_links WHERE key_hash=? AND expires_at>?)').bind(event.chatId, hash, now),
       env.DB.prepare('DELETE FROM telegram_links WHERE key_hash=?').bind(hash),
     ]);
+    if (result[1].meta.changes) {
+      const paired = await env.DB.prepare('SELECT id FROM workspaces WHERE telegram_chat_id=?').bind(event.chatId).first<{ id: string }>();
+      if (paired) await track(env, paired.id, 'telegram_connected');
+    }
     return result[1].meta.changes ? 'Your Stick space is connected.\n\nSend /quiz for one recall question. Answer directly here, or ask follow-up questions about your saved insights.\n\n/skip skips a question; /stop pauses proactive quizzes; /resume restores them.' : 'That pairing link has expired or was already used. Create a new link from your Stick space.';
   }
   if (hasSensitiveContent(text) || text === '[Stick: sensitive content redacted]') return 'That looks like it contains a credential or private link. I won’t store it or send it to Azure. Please send a redacted question instead.';
@@ -54,9 +61,11 @@ export async function handleBotEvent(env: Env, event: BotEvent): Promise<string>
   let reply: string;
   if (text === '/stop') {
     await env.DB.prepare('UPDATE workspaces SET notifications_enabled=0 WHERE id=?').bind(workspace.id).run();
+    await track(env, workspace.id, 'notifications_paused');
     reply = 'Proactive quizzes are paused. You can still ask questions or send /quiz. Send /resume whenever you want reminders again.';
   } else if (text === '/resume') {
     await env.DB.prepare('UPDATE workspaces SET notifications_enabled=1,unanswered_pings=0 WHERE id=?').bind(workspace.id).run();
+    await track(env, workspace.id, 'notifications_resumed');
     reply = 'Proactive quizzes are enabled again. I’ll respect your timezone, quiet hours and daily question limit.';
   } else if (text === '/help' || text === '/start') {
     reply = 'Stick remembers insights from your agent sessions.\n\n/quiz — one saved question, even before it is due\n/skip — skip without advancing its review schedule\n/stop — pause proactive quizzes\n/resume — enable them again\n\nYou can answer a quiz or ask follow-up questions directly here.';
@@ -69,6 +78,7 @@ export async function handleBotEvent(env: Env, event: BotEvent): Promise<string>
       if (attempt) {
         excluded = attempt.card_id;
         await env.DB.prepare("UPDATE attempts SET status='graded',feedback='Skipped without rescheduling' WHERE id=? AND channel='telegram'").bind(attempt.id).run();
+        await track(env, workspace.id, 'question_skipped', { channel: 'telegram' });
       }
     }
     reply = await nextQuestion(env, workspace, event.kind === 'scheduled', excluded);
@@ -78,14 +88,18 @@ export async function handleBotEvent(env: Env, event: BotEvent): Promise<string>
     const context = await env.DB.prepare('SELECT title,summary,insights FROM learnings WHERE workspace_id=? ORDER BY created_at DESC LIMIT 6').bind(workspace.id).all();
     const history = await env.DB.prepare('SELECT role,content FROM chat_messages WHERE workspace_id=? ORDER BY id DESC LIMIT 10').bind(workspace.id).all();
     const answer = active?.status === 'answered' ? active.user_answer! : text;
-    const result = await coachTurn(env, workspace.id, { message: answer, pending_quiz: active ? { question: active.question, reference: active.expected_answer } : null, recent_insights: context.results, history: history.results.reverse() });
+    // Outside a quiz, pull related earlier learning from the Cognee graph so follow-ups
+    // can draw on everything saved, not just the six most recent entries.
+    const graph = active ? null : await searchCognee(env, workspace.id, text);
+    const result = await coachTurn(env, workspace.id, { message: answer, pending_quiz: active ? { question: active.question, reference: active.expected_answer } : null, recent_insights: context.results, ...(graph ? { knowledge_graph_context: graph } : {}), history: history.results.reverse() });
     reply = result.reply;
     if (active && result.kind === 'answer' && result.rating) {
       await env.DB.prepare("UPDATE attempts SET user_answer=?,answered_at=?,status='answered' WHERE id=? AND status='asked' AND channel='telegram'").bind(answer, Date.now(), active.id).run();
       const review = await finishReview(env, workspace.id, active.id, result.rating, reply);
       reply += `\n\nNext review: ${new Date(review.next_review_at).toLocaleDateString('en', { timeZone: workspace.timezone, month: 'short', day: 'numeric' })}. Send /quiz for another question, or ask me to explain further.`;
-    } else if (result.kind === 'discussion' && workspace.capture_enabled) {
-      await captureInteraction(env, workspace.id, captureSchema.parse({ session_key: `telegram:${event.chatId}`, session_title: 'Telegram conversations', source_agent: 'Stick Telegram', event_id: event.id, title: result.insights[0]?.title ?? 'Telegram follow-up', user_message: text, summary: reply, insights: result.insights, cards: result.cards }));
+    } else if (result.kind === 'discussion') {
+      await track(env, workspace.id, 'telegram_discussion', { used_graph: Boolean(graph) });
+      if (workspace.capture_enabled) await captureInteraction(env, workspace.id, captureSchema.parse({ session_key: `telegram:${event.chatId}`, session_title: 'Telegram conversations', source_agent: 'Stick Telegram', event_id: event.id, title: result.insights[0]?.title ?? 'Telegram follow-up', user_message: text, summary: reply, insights: result.insights, cards: result.cards }));
     }
   }
   if (!reply) return '';

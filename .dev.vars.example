@@ -7,3 +7,11 @@
 # AZURE_OPENAI_DEPLOYMENT=your-deployment-name
 # AZURE_OPENAI_API_KEY=your-private-azure-key
 # AZURE_OPENAI_API_VERSION=2024-10-21
+# Optional Amplitude + Statsig. Events carry counts/ratings only, never learning text.
+# AMPLITUDE_API_KEY=your-amplitude-project-api-key
+# AMPLITUDE_API_URL=https://api.eu.amplitude.com/2/httpapi   # only for EU data residency
+# STATSIG_SERVER_SECRET=secret-your-statsig-server-key
+# Optional Cognee knowledge graph (copy "API base URL" from Cognee Cloud > API Keys).
+# Receives redacted summaries/insights only.
+# COGNEE_API_URL=https://tenant-xxxx.aws.cognee.ai
+# COGNEE_API_KEY=your-cognee-api-key
