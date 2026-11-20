@@ -124,7 +124,7 @@ pairing another replaces that chat's previous association.
 Ask your MCP agent to save an interaction with a recall card and
 `first_review_in_minutes: 0`, then send the bot:
 
-- `/quiz`: receive one due question, with no reference answer shown.
+- `/quiz` or “quiz me”: receive one saved question immediately, even before it is due, with no reference answer shown. Due questions are prioritized.
 - Reply with your answer: Azure evaluates it, gives feedback, and FSRS schedules it.
 - “Can you explain why?”: discuss the saved insight directly in Telegram.
 - `/skip`: skip without advancing that card's schedule.

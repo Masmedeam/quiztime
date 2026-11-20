@@ -35,6 +35,23 @@ test('clarifying questions do not get graded; skip/stop/resume preserve review s
   await handleBotEvent(env, { id: 'resume', chatId: '111', kind: 'message', text: '/resume' });
   assert.equal(sqlite.prepare("SELECT notifications_enabled FROM workspaces WHERE id='a'").get()?.notifications_enabled, 1);
 });
+test('explicit quiz requests serve future cards while proactive quizzes wait until due', async t => {
+  const { env, sqlite } = fixture(); t.after(() => sqlite.close());
+  t.mock.method(globalThis, 'fetch', async () => { assert.fail('Starting a saved quiz needs no model request'); });
+  const future = Date.now() + 60 * 60_000;
+  sqlite.prepare("UPDATE cards SET due_at=? WHERE id='c-a'").run(future);
+  sqlite.prepare("UPDATE workspaces SET quiet_start=0,quiet_end=0 WHERE id='a'").run();
+  assert.equal(await handleBotEvent(env, { id: 'scheduled-future', chatId: '111', workspaceId: 'a', kind: 'scheduled' }), '');
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM attempts').get()?.n, 0);
+  const asked = await handleBotEvent(env, { id: 'explicit-future', chatId: '111', kind: 'message', text: '/quiz' });
+  assert.ok(asked.includes('Explain atomic transactions'));
+  assert.ok(!asked.includes('All-or-nothing changes'));
+  assert.equal(sqlite.prepare("SELECT due_at FROM cards WHERE id='c-a'").get()?.due_at, future);
+  const natural = await handleBotEvent(env, { id: 'natural-future', chatId: '111', kind: 'message', text: 'Quiz me please!' });
+  assert.ok(natural.includes('Explain atomic transactions'));
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM attempts').get()?.n, 1);
+  assert.equal(sqlite.prepare("SELECT review_count FROM cards WHERE id='c-b'").get()?.review_count, 0);
+});
 test('credentials in Telegram are neither sent to Azure nor persisted', async t => {
   const { env, sqlite } = fixture(); t.after(() => sqlite.close());
   t.mock.method(globalThis, 'fetch', async () => { assert.fail('No external request allowed'); });

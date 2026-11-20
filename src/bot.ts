@@ -20,9 +20,9 @@ async function nextQuestion(env: Env, workspace: BotWorkspace, proactive: boolea
   if (proactive && (!workspace.notifications_enabled || isQuietHour(clock.hour, workspace.quiet_start, workspace.quiet_end) || workspace.unanswered_pings >= 3 || (workspace.question_day === clock.day && workspace.questions_today >= workspace.daily_limit))) return '';
   let attempt = await activeAttempt(env, workspace.id);
   if (!attempt) {
-    const card = await env.DB.prepare("SELECT c.id FROM cards c JOIN learnings l ON l.id=c.learning_id WHERE l.workspace_id=? AND c.due_at<=? AND c.id!=? AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.card_id=c.id AND a.status!='graded' AND a.channel!='telegram') ORDER BY c.priority DESC,c.lapses DESC,c.due_at LIMIT 1")
-      .bind(workspace.id, now, exclude ?? '').first<{ id: string }>();
-    if (!card) return proactive ? '' : 'Nothing is due right now. Ask me about your saved insights, or come back for the next review.';
+    const card = await env.DB.prepare("SELECT c.id FROM cards c JOIN learnings l ON l.id=c.learning_id WHERE l.workspace_id=? AND (?=0 OR c.due_at<=?) AND c.id!=? AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.card_id=c.id AND a.status!='graded' AND a.channel!='telegram') ORDER BY CASE WHEN c.due_at<=? THEN 0 ELSE 1 END,c.priority DESC,c.lapses DESC,c.due_at LIMIT 1")
+      .bind(workspace.id, Number(proactive), now, exclude ?? '', now).first<{ id: string }>();
+    if (!card) return proactive ? '' : 'No saved question is available right now. Save a recall question with your agent, or ask me about your saved insights.';
     await env.DB.prepare("INSERT OR IGNORE INTO attempts(id,card_id,status,created_at,channel) VALUES (?,?,'asked',?,'telegram')").bind(crypto.randomUUID(), card.id, now).run();
     attempt = await activeAttempt(env, workspace.id);
   }
@@ -59,10 +59,10 @@ export async function handleBotEvent(env: Env, event: BotEvent): Promise<string>
     await env.DB.prepare('UPDATE workspaces SET notifications_enabled=1,unanswered_pings=0 WHERE id=?').bind(workspace.id).run();
     reply = 'Proactive quizzes are enabled again. I’ll respect your timezone, quiet hours and daily question limit.';
   } else if (text === '/help' || text === '/start') {
-    reply = 'Stick remembers insights from your agent sessions.\n\n/quiz — one due question\n/skip — skip without advancing its review schedule\n/stop — pause proactive quizzes\n/resume — enable them again\n\nYou can answer a quiz or ask follow-up questions directly here.';
+    reply = 'Stick remembers insights from your agent sessions.\n\n/quiz — one saved question, even before it is due\n/skip — skip without advancing its review schedule\n/stop — pause proactive quizzes\n/resume — enable them again\n\nYou can answer a quiz or ask follow-up questions directly here.';
   } else if (!azureConfigured(env)) {
     reply = 'The Azure coach is not configured by the server operator yet. Your saved insights are safe; you can still review them with your MCP agent.';
-  } else if (event.kind === 'scheduled' || ['/quiz', '/next', '/skip'].includes(text)) {
+  } else if (event.kind === 'scheduled' || ['/quiz', '/next', '/skip'].includes(text) || /^(?:please\s+)?(?:quiz me|test me|give me (?:a |one )?(?:quiz|question)|ask me (?:a |one )?question)(?:\s+please)?[.!?]*$/i.test(text)) {
     let excluded: string | undefined;
     if (text === '/skip') {
       const attempt = await activeAttempt(env, workspace.id);
